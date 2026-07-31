@@ -1,0 +1,11 @@
+services:
+  - type: worker
+    name: nvidia-apt-alerts
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scheduler.py
+    envVars:
+      - key: SENDER_EMAIL
+        sync: false        # set in Render dashboard
+      - key: SENDER_PASSWORD
+        sync: false        # set in Render dashboard (Gmail App Password)
