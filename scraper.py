@@ -39,6 +39,7 @@ SEEN_DB          = Path("seen_listings.json")              # de-dupe store
 MAX_RENT         = 6000
 MIN_BEDS         = 2
 MAX_WALK_MILES   = 0.5   # radius around each shuttle stop
+AVAILABLE_FROM   = date(2025, 9, 1)   # only apartments available on or after this date
 
 # ── Shuttle stops (lat, lng, name) ────────────────────────────────────────────
 SHUTTLE_STOPS = [
@@ -72,6 +73,70 @@ def nearest_stops(lat: float, lng: float) -> list[dict]:
         if d <= MAX_WALK_MILES:
             results.append({"name": name, "route": route, "miles": round(d, 2)})
     return sorted(results, key=lambda x: x["miles"])
+
+
+# ── Availability date filter ──────────────────────────────────────────────────
+import re
+
+DATE_PATTERNS = [
+    r'available\s+(\w+\.?\s+\d{1,2})',           # "available Sept 1"
+    r'avail\.?\s+(\w+\.?\s+\d{1,2})',            # "avail. Sept 1"
+    r'move.in\s+(\w+\.?\s+\d{1,2})',             # "move-in Sept 1"
+    r'(\d{1,2})[\/\-](\d{1,2})(?:[\/\-]\d{2,4})?',  # "9/1" or "9-1"
+]
+
+MONTH_MAP = {
+    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+}
+
+def parse_avail_date(text: str) -> Optional[date]:
+    """Extract availability date from listing text. Returns None if not found."""
+    text = text.lower()
+    for pattern in DATE_PATTERNS[:3]:
+        m = re.search(pattern, text)
+        if m:
+            try:
+                parts = m.group(1).strip().split()
+                month_str = parts[0].rstrip('.').lower()[:3]
+                day = int(parts[1]) if len(parts) > 1 else 1
+                month = MONTH_MAP.get(month_str)
+                if month:
+                    year = 2025 if month >= 8 else 2026
+                    return date(year, month, day)
+            except Exception:
+                pass
+    # numeric pattern like 9/1
+    m = re.search(DATE_PATTERNS[3], text)
+    if m:
+        try:
+            month, day = int(m.group(1)), int(m.group(2))
+            if 1 <= month <= 12 and 1 <= day <= 31:
+                year = 2025 if month >= 8 else 2026
+                return date(year, month, day)
+        except Exception:
+            pass
+    return None
+
+def is_available_from_sept(listing: dict) -> bool:
+    """
+    Returns True if:
+    - No availability date found (keep it — we can't rule it out)
+    - Availability date is on or after AVAILABLE_FROM
+    """
+    text = " ".join([
+        listing.get("title", ""),
+        listing.get("meta", ""),
+        listing.get("description", ""),
+    ])
+    avail = parse_avail_date(text)
+    if avail is None:
+        return True   # no date mentioned — include it
+    if avail >= AVAILABLE_FROM:
+        listing["avail_date"] = avail.strftime("%b %d")
+        return True
+    log.debug(f"Filtered out (available {avail}): {listing['title']}")
+    return False
 
 
 # ── De-duplication ────────────────────────────────────────────────────────────
@@ -341,6 +406,7 @@ def build_email_html(listings: list[dict], send_time: str) -> str:
           <div style="font-size:12px;color:#888;margin-bottom:8px">
             {lst.get('address','') or 'San Francisco, CA'} &nbsp;·&nbsp;
             {lst.get('meta','2 bed')} &nbsp;·&nbsp; {parking_note} &nbsp;·&nbsp;
+            {'Available ' + lst['avail_date'] + ' &nbsp;·&nbsp; ' if lst.get('avail_date') else ''}
             <span style="color:#5F5E5A">{lst['source']}</span>
           </div>
           <div style="margin-bottom:10px">{stops_html}</div>
@@ -412,7 +478,11 @@ def run(send_time: str = "morning"):
     raw += scrape_apartments_com()
     log.info(f"Total raw listings: {len(raw)}")
 
-    # 2. Filter by proximity to shuttle stops
+    # 2. Filter by availability date (Sept 1 or later, or no date specified)
+    raw = [l for l in raw if is_available_from_sept(l)]
+    log.info(f"After availability filter: {len(raw)}")
+
+    # 3. Filter by proximity to shuttle stops
     matched = filter_by_proximity(raw)
     log.info(f"Matched listings near shuttle stops: {len(matched)}")
 
