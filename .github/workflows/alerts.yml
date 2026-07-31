@@ -1,0 +1,44 @@
+name: Apartment Alerts
+
+on:
+  schedule:
+    - cron: '30 15 * * 1-5'   # 7:30 AM PT (UTC-8) — weekdays
+    - cron: '30 1 * * 2-6'    # 5:30 PM PT (UTC-8) — weekdays
+  workflow_dispatch:            # allows manual trigger from GitHub UI for testing
+
+jobs:
+  send-alerts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run morning alert
+        if: github.event.schedule == '30 15 * * 1-5'
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+        run: python scraper.py morning
+
+      - name: Run evening alert
+        if: github.event.schedule == '30 1 * * 2-6'
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+        run: python scraper.py evening
+
+      - name: Run manual test (both slots)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+        run: python scraper.py morning
